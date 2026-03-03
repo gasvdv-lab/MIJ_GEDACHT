@@ -15,120 +15,95 @@ try:
     GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"]
     GITHUB_REPO = st.secrets["GITHUB_REPO"]
 except Exception:
-    st.error("⚠️ Configuratie niet compleet in Streamlit Secrets.")
+    st.error("⚠️ Configuratie niet compleet.")
     st.stop()
 
-# 2. Clients initialiseren
+# 2. Clients
 groq_client = Groq(api_key=GROQ_API_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
 gemini_model = genai.GenerativeModel('gemini-3-flash-preview')
 
-# 3. GitHub Functies met verbeterde foutafhandeling voor opslaan
-def get_github_db():
+# 3. GitHub Sync (Altijd de nieuwste versie ophalen voor het schrijven)
+def get_latest_github_state():
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/database.json"
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
     resp = requests.get(url, headers=headers)
     if resp.status_code == 200:
         data = resp.json()
-        content = base64.b64decode(data["content"]).decode("utf-8")
-        return json.loads(content), data["sha"]
+        return json.loads(base64.b64decode(data["content"]).decode("utf-8")), data["sha"]
     return {}, None
 
-def save_to_github(data, sha=None):
+def save_to_github_max(data, sha):
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/database.json"
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-    content_json = json.dumps(data, indent=4)
-    content_base64 = base64.b64encode(content_json.encode("utf-8")).decode("utf-8")
-    
-    payload = {
-        "message": "Archief bijwerken met maximaal volume",
-        "content": content_base64
-    }
-    if sha:
-        payload["sha"] = sha
-        
+    content_b64 = base64.b64encode(json.dumps(data, indent=4).encode("utf-8")).decode("utf-8")
+    payload = {"message": "MAX VOLUME UPDATE", "content": content_b64, "sha": sha}
     resp = requests.put(url, json=payload, headers=headers)
-    if resp.status_code in [200, 201]:
-        return resp.json().get("content", {}).get("sha")
-    else:
-        st.error(f"GitHub Opslagfout: {resp.status_code} - {resp.text}")
-        return sha
+    return resp.status_code in [200, 201]
 
-# --- UI CONFIGURATIE ---
-st.set_page_config(page_title="Mij Gedacht AI", page_icon="🎙️", layout="centered")
+# --- UI ---
+st.set_page_config(page_title="Mij Gedacht AI - MAX", layout="centered")
 
-if os.path.exists("logo.png"):
-    st.image("logo.png", width=200)
-elif os.path.exists("foto.png"):
-    st.image("foto.png", width=200)
-else:
-    st.image("https://i1.sndcdn.com/avatars-I7oN87f2iIuImsC0-E2M1XQ-t500x500.jpg", width=200)
+if os.path.exists("logo.png"): st.image("logo.png", width=250)
+elif os.path.exists("foto.png"): st.image("foto.png", width=250)
 
-st.markdown("<h1 style='margin-top: -20px;'>Mij Gedacht AI</h1>", unsafe_allow_html=True)
+st.title("🎙️ Mij Gedacht AI (Full Capacity)")
 
-db, current_sha = get_github_db()
+db, current_sha = get_latest_github_state()
 
-# --- DE ZOEKFUNCTIE (MAXIMAAL VOLUME) ---
-query = st.text_input("Vraag de conciërge iets:", placeholder="Stel je vraag...")
+query = st.text_input("Doorzoek het volledige archief:", placeholder="Vraag iets heel specifieks...")
 if query and db:
-    with st.spinner("De conciërge diept het archief uit..."):
-        # We voeren Gemini nu een enorme hoeveelheid context (100k karakters)
-        context = "\n".join([f"{k}: {v['summary']}" for k, v in db.items()])
+    with st.spinner("Maximale analyse van het archief..."):
+        # We gebruiken nu 200.000 karakters context voor de zoekopdracht
+        context = "\n\n".join([f"AFLEVERING: {k}\nINHOUD: {v['summary']}" for k, v in db.items()])
         try:
-            full_prompt = f"Antwoord zeer uitgebreid en in sappig Vlaams: {query}\n\nContext uit alle afleveringen:\n{context[:100000]}"
-            res = gemini_model.generate_content(full_prompt)
-            st.chat_message("assistant").write(res.text)
-        except Exception:
-            st.error("Google quota bereikt. Probeer het over een tijdje opnieuw.")
+            prompt = f"Je bent de ultieme Mij Gedacht expert. Antwoord zeer uitgebreid, met humor en in sappig Vlaams. Gebruik ALLE details uit de context: \n\n{context[:200000]}\n\nVRAAG: {query}"
+            res = gemini_model.generate_content(prompt)
+            st.info(res.text)
+        except:
+            st.error("Quota bereikt. Google heeft even rust nodig.")
 
-# --- BEHEER (MEER TIJD & GROTERE FILES) ---
 with st.sidebar:
-    st.header("⚙️ Geavanceerd Beheer")
-    st.write(f"Items in database: {len(db)}")
-    
-    if st.button("🔄 Start Diepe Scan (Max Volume)"):
+    st.header("🚀 Power Beheer")
+    if st.button("🔥 START MAX VOLUME SCAN"):
         feed = feedparser.parse("https://feeds.soundcloud.com/users/soundcloud:users:191935492/sounds.rss")
         new_entries = [e for e in feed.entries if e.title not in db]
         
         if new_entries:
             entry = new_entries[0]
-            with st.status(f"Grote analyse: {entry.title}"):
-                # We downloaden nu tot 24.5MB (strak tegen de Groq limiet aan voor max tijd)
+            with st.status(f"Bezig met Deep Scan: {entry.title}"):
+                # We gaan naar de absolute grens van Groq (24.9MB)
                 r = requests.get(entry.enclosures[0].href, stream=True)
-                audio_file = "temp.mp3"
+                audio_file = "max_temp.mp3"
                 with open(audio_file, "wb") as f:
                     size = 0
-                    for chunk in r.iter_content(chunk_size=65536):
-                        if chunk:
-                            f.write(chunk)
-                            size += len(chunk)
-                            if size > 24.5 * 1024 * 1024: 
-                                break
+                    for chunk in r.iter_content(chunk_size=131072):
+                        f.write(chunk)
+                        size += len(chunk)
+                        if size > 24.9 * 1024 * 1024: break
                 
                 try:
-                    # Transcriptie via Groq
                     with open(audio_file, "rb") as f:
                         ts = groq_client.audio.transcriptions.create(
-                            file=(audio_file, f),
-                            model="whisper-large-v3-turbo",
-                            response_format="text", 
-                            language="nl"
+                            file=(audio_file, f), model="whisper-large-v3-turbo", response_format="text", language="nl"
                         )
                     
-                    # Gemini analyseert nu tot 120.000 karakters tekst voor de samenvatting
+                    # Gemini krijgt nu tot 500.000 karakters (vrijwel de hele transcriptie)
+                    # We dwingen een 'verslag' af ipv een samenvatting
                     res = gemini_model.generate_content(
-                        f"Maak een extreem gedetailleerde, lange samenvatting in sappig Vlaams. "
-                        f"Benoem alle namen, grappen en verhalen die je hoort: {ts[:120000]}"
+                        f"Schrijf een extreem uitgebreid verslag van deze podcast in sappig Vlaams. "
+                        f"Noteer elke grap, elk verhaal, elke vernoemde persoon en elke anekdote tot in het kleinste detail. "
+                        f"Maak er een tekst van minstens 2000 woorden van: {ts[:500000]}"
                     )
                     
                     db[entry.title] = {"summary": res.text, "date": entry.published}
-                    save_to_github(db, current_sha)
                     
-                    if os.path.exists(audio_file): os.remove(audio_file)
-                    st.success("✅ Diepe scan opgeslagen in GitHub!")
-                    time.sleep(1)
-                    st.rerun()
+                    # Opnieuw SHA ophalen net voor schrijven om errors te voorkomen
+                    _, latest_sha = get_latest_github_state()
+                    if save_to_github_max(db, latest_sha):
+                        st.success("✅ MAX VOLUME SCAN OPGESLAGEN!")
+                        if os.path.exists(audio_file): os.remove(audio_file)
+                        time.sleep(1)
+                        st.rerun()
                 except Exception as e:
                     st.error(f"Fout: {e}")
-        else:
-            st.info("Geen nieuwe afleveringen.")
