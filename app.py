@@ -15,15 +15,18 @@ try:
     GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"]
     GITHUB_REPO = st.secrets["GITHUB_REPO"]
 except Exception as e:
-    st.error(f"Sleutels missen: {e}")
+    st.error(f"Configuratie fout: {e}")
     st.stop()
 
 # 2. Clients initialiseren
-groq_client = Groq(api_key=GROQ_API_KEY)
-genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel('gemini-3-flash-preview')
+try:
+    groq_client = Groq(api_key=GROQ_API_KEY)
+    genai.configure(api_key=GEMINI_API_KEY)
+    gemini_model = genai.GenerativeModel('gemini-3-flash-preview')
+except Exception as e:
+    st.error(f"Initialisatie fout: {e}")
 
-# 3. GitHub Functies met harde foutmeldingen
+# 3. GitHub Functies
 def get_github_db():
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/database.json"
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
@@ -36,86 +39,46 @@ def get_github_db():
 
 def save_to_github(data, sha=None):
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/database.json"
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    
-    json_string = json.dumps(data, indent=4)
-    content_base64 = base64.b64encode(json_string.encode("utf-8")).decode("utf-8")
-    
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
     payload = {
-        "message": f"Update archief: {len(data)} items",
-        "content": content_base64
+        "message": f"Update: {len(data)} items",
+        "content": base64.b64encode(json.dumps(data, indent=4).encode("utf-8")).decode("utf-8")
     }
-    if sha:
-        payload["sha"] = sha
-    
-    # DEBUG: Toon status voor verzending
-    st.warning(f"Verzenden naar GitHub: {GITHUB_REPO}...")
-    
+    if sha: payload["sha"] = sha
     resp = requests.put(url, json=payload, headers=headers)
-    
-    if resp.status_code in [200, 201]:
-        st.success("🎉 GitHub heeft de data ONTVANGEN!")
-        return resp.json()["content"]["sha"]
-    else:
-        st.error(f"❌ GITHUB WEIGERT OPSLAG! Code: {resp.status_code}")
-        st.write(resp.json())
-        return sha
+    return resp.status_code == 200 or resp.status_code == 201
 
-# --- INTERFACE ---
-st.set_page_config(page_title="Mij Gedacht AI", page_icon="🎙️")
-st.title("🎙️ Mij Gedacht AI")
-
+# --- UI ---
+st.title("🎙️ Mij Gedacht AI - Diagnose Mode")
 db, current_sha = get_github_db()
+st.write(f"Archief bevat {len(db)} items.")
 
-# Zoekbalk
-query = st.text_input("Vraag iets aan de conciërge:")
-if query and db:
-    context_text = "\n".join([f"{k}: {v['summary']}" for k, v in db.items()])
-    res = gemini_model.generate_content(f"Vlaamse conciërge antwoordt op: {query}\nContext: {context_text[:15000]}")
-    st.chat_message("assistant").write(res.text)
-
-# Beheer in zijbalk
-with st.sidebar:
-    st.header("⚙️ Beheer")
-    st.write(f"Database items: {len(db)}")
+if st.button("🚀 Test Transcriptie"):
+    feed = feedparser.parse("https://feeds.soundcloud.com/users/soundcloud:users:191935492/sounds.rss")
+    entry = feed.entries[0]
     
-    if st.button("🔄 Start Scan"):
-        feed = feedparser.parse("https://feeds.soundcloud.com/users/soundcloud:users:191935492/sounds.rss")
-        new_entries = [e for e in feed.entries if e.title not in db]
+    with st.status("Stap 1: Downloaden...") as s:
+        r = requests.get(entry.enclosures[0].href, stream=True)
+        with open("test.mp3", "wb") as f:
+            for chunk in r.iter_content(chunk_size=1024*1024):
+                f.write(chunk)
+                if os.path.getsize("test.mp3") > 2 * 1024 * 1024: break # Extreem klein fragment (2MB)
         
-        if new_entries:
-            entry = new_entries[0]
-            with st.status(f"Verwerken: {entry.title}"):
-                # 1. Download
-                audio_url = entry.enclosures[0].href
-                r = requests.get(audio_url)
-                with open("temp.mp3", "wb") as f:
-                    f.write(r.content)
+        st.write("Stap 2: Groq aanroepen...")
+        try:
+            with open("test.mp3", "rb") as f:
+                # We lezen het bestand expliciet in
+                audio_data = f.read()
                 
-                # 2. Transcribe
-                with open("temp.mp3", "rb") as f:
-                    ts = groq_client.audio.transcriptions.create(
-                        file=("temp.mp3", f.read()),
-                        model="whisper-large-v3-turbo",
-                        response_format="text", language="nl"
-                    )
-                
-                # 3. AI Analyse
-                res = gemini_model.generate_content(f"Vat kort samen in Vlaams: {ts[:8000]}")
-                summary = res.text
-                
-                # 4. Toevoegen aan lokale DB
-                db[entry.title] = {"summary": summary, "date": entry.published}
-                
-                # 5. Opslaan (Hier moet de foutmelding komen)
-                new_sha = save_to_github(db, current_sha)
-                
-                if new_sha != current_sha:
-                    st.balloons()
-                    time.sleep(3)
-                    st.rerun()
-        else:
-            st.info("Geen nieuwe afleveringen.")
+                transcription = groq_client.audio.transcriptions.create(
+                    file=("test.mp3", audio_data),
+                    model="whisper-large-v3-turbo",
+                    response_format="json"
+                )
+            st.success("✅ Groq werkt!")
+            st.write(transcription)
+        except Exception as e:
+            st.error("❌ Groq weigert dienst!")
+            st.exception(e) # Dit toont de VOLLEDIGE foutmelding
+        finally:
+            if os.path.exists("test.mp3"): os.remove("test.mp3")
