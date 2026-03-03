@@ -24,13 +24,10 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
 gemini_model = genai.GenerativeModel('gemini-3-flash-preview')
 
-# 3. GitHub Sync met extra foutcontrole
+# 3. GitHub Sync
 def get_latest_github_state():
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/database.json"
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Cache-Control": "no-cache"
-    }
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Cache-Control": "no-cache"}
     resp = requests.get(url, headers=headers)
     if resp.status_code == 200:
         data = resp.json()
@@ -38,11 +35,10 @@ def get_latest_github_state():
     return {}, None
 
 def save_to_github_max(data):
-    """Haalt op het allerlaatste moment de SHA op om conflicten te voorkomen."""
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/database.json"
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
     
-    # Forceer ophalen van de ALLERLAATSTE sha vlak voor het schrijven
+    # Haal laatste SHA op
     current_state = requests.get(url, headers=headers)
     sha = current_state.json().get("sha") if current_state.status_code == 200 else None
     
@@ -57,7 +53,8 @@ def save_to_github_max(data):
     
     resp = requests.put(url, json=payload, headers=headers)
     if resp.status_code not in [200, 201]:
-        st.error(f"GitHub Detailfout: {resp.status_code} - {resp.text}")
+        # Log de foutmelding voor de gebruiker
+        st.session_state.last_error = f"GitHub Error {resp.status_code}: {resp.text[:200]}"
         return False
     return True
 
@@ -91,7 +88,6 @@ with st.sidebar:
         if new_entries:
             entry = new_entries[0]
             with st.status(f"Scan: {entry.title}") as status:
-                # Download
                 add_log(f"Start download van {entry.title}...")
                 r = requests.get(entry.enclosures[0].href, stream=True)
                 audio_file = "temp.mp3"
@@ -103,20 +99,17 @@ with st.sidebar:
                         if size > 24.8 * 1024 * 1024: break
                 
                 try:
-                    # Transcribe
                     add_log("Verzenden naar Groq...")
                     with open(audio_file, "rb") as f:
                         ts = groq_client.audio.transcriptions.create(
                             file=(audio_file, f), model="whisper-large-v3-turbo", response_format="text", language="nl"
                         )
                     
-                    # Analyze
                     add_log(f"Gemini analyseert {len(ts)} tekens...")
                     res = gemini_model.generate_content(
                         f"Schrijf een extreem uitgebreid verslag van deze podcast in sappig Vlaams: {ts[:500000]}"
                     )
                     
-                    # Save
                     add_log("Synchroniseren met GitHub...")
                     db[entry.title] = {"summary": res.text, "date": entry.published}
                     
@@ -127,7 +120,7 @@ with st.sidebar:
                         time.sleep(2)
                         st.rerun()
                     else:
-                        add_log("❌ Opslag mislukt.")
+                        add_log(f"❌ Opslag mislukt: {st.session_state.get('last_error', 'Onbekende fout')}")
                 except Exception as e:
                     add_log(f"ERROR: {e}")
         else:
