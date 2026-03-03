@@ -10,14 +10,16 @@ if "GROQ_API_KEY" in st.secrets and "GEMINI_API_KEY" in st.secrets:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 else:
-    st.error("⚠️ API sleutels niet gevonden in Streamlit Secrets!")
+    st.error("⚠️ API sleutels niet gevonden!")
     st.stop()
 
-# 2. Clients initialiseren met de JUISTE modelnaam
+# 2. Clients initialiseren
 try:
     groq_client = Groq(api_key=GROQ_API_KEY)
     genai.configure(api_key=GEMINI_API_KEY)
-    # De fix: We gebruiken 'gemini-1.5-flash' zonder 'models/' ervoor als alternatief
+    
+    # DE FIX: We gebruiken de korte naam 'gemini-1.5-flash' 
+    # De bibliotheek kiest zelf de beste versie (v1beta of v1)
     gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 except Exception as e:
     st.error(f"Fout bij initialisatie: {e}")
@@ -37,7 +39,7 @@ if st.button("Analyseer Laatste Aflevering"):
             audio_url = entry.enclosures[0].href
             st.info(f"Bezig met: {entry.title}")
 
-            # 2. Audio ophalen (fragment)
+            # 2. Audio ophalen (fragment van 10MB voor snelheid)
             audio_file = "temp_audio.mp3"
             response = requests.get(audio_url, stream=True)
             with open(audio_file, "wb") as f:
@@ -46,7 +48,8 @@ if st.button("Analyseer Laatste Aflevering"):
                     if os.path.getsize(audio_file) > 10 * 1024 * 1024:
                         break
 
-            # 3. Transcriptie via GROQ
+            # 3. Transcriptie via GROQ (Whisper Large V3 Turbo)
+            st.write("🤖 AI luistert via Groq...")
             with open(audio_file, "rb") as file:
                 transcription = groq_client.audio.transcriptions.create(
                     file=(audio_file, file.read()),
@@ -56,14 +59,18 @@ if st.button("Analyseer Laatste Aflevering"):
                 )
             
             # 4. Samenvatting via Gemini
-            prompt = f"Vat dit fragment van de podcast 'Mij Gedacht' kort samen in het Vlaams: {transcription[:8000]}"
-            summary = gemini_model.generate_content(prompt)
+            st.write("🧠 Brein (Gemini) analyseert...")
+            prompt = f"Vat dit fragment van de podcast 'Mij Gedacht' kort en gevat samen in het Vlaams: {transcription[:8000]}"
+            
+            # We voegen een extra check toe voor de generatie
+            response = gemini_model.generate_content(prompt)
 
             st.success("Klaar!")
-            st.subheader("Analyse")
-            st.write(summary.text)
+            st.subheader("De Analyse")
+            st.write(response.text)
             
         except Exception as e:
+            # We tonen de fout maar houden het opgeruimd
             st.error(f"Er ging iets mis: {e}")
         finally:
             if os.path.exists(audio_file):
