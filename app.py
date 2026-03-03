@@ -18,9 +18,8 @@ try:
     groq_client = Groq(api_key=GROQ_API_KEY)
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # We proberen de meest universele modelnaam
-    model_name = 'gemini-1.5-flash-latest' 
-    gemini_model = genai.GenerativeModel(model_name)
+    # We proberen de meest stabiele model-aanroep
+    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 except Exception as e:
     st.error(f"Fout bij initialisatie: {e}")
     st.stop()
@@ -35,21 +34,17 @@ if st.button("Analyseer Laatste Aflevering"):
         try:
             # 1. RSS Feed
             feed = feedparser.parse(rss_url)
-            if not feed.entries:
-                st.error("Geen afleveringen gevonden.")
-                st.stop()
-                
             entry = feed.entries[0]
             audio_url = entry.enclosures[0].href
             st.info(f"Bezig met: {entry.title}")
 
-            # 2. Audio ophalen (fragment van 8MB voor maximale snelheid)
+            # 2. Audio ophalen (fragment)
             audio_file = "temp_audio.mp3"
             response = requests.get(audio_url, stream=True)
             with open(audio_file, "wb") as f:
                 for chunk in response.iter_content(chunk_size=1024*1024):
                     f.write(chunk)
-                    if os.path.getsize(audio_file) > 8 * 1024 * 1024:
+                    if os.path.getsize(audio_file) > 10 * 1024 * 1024:
                         break
 
             # 3. Transcriptie via GROQ
@@ -64,18 +59,24 @@ if st.button("Analyseer Laatste Aflevering"):
             
             # 4. Samenvatting via Gemini
             st.write("🧠 Brein (Gemini) analyseert...")
-            prompt = f"Je bent een expert van de podcast 'Mij Gedacht'. Vat dit fragment kort en gevat samen in het Vlaams: {transcription[:8000]}"
             
-            # Genereren met foutafhandeling voor het model
+            # We forceren hier de aanroep zonder extra opties om 404 te vermijden
+            prompt = f"Vat dit fragment van de podcast 'Mij Gedacht' kort samen in het Vlaams: {transcription[:8000]}"
+            
+            # De 'magic fix': we proberen direct te genereren
             response = gemini_model.generate_content(prompt)
 
             st.success("Klaar!")
-            st.subheader("De Analyse")
+            st.subheader("Analyse")
             st.write(response.text)
             
         except Exception as e:
-            st.error(f"Er ging iets mis tijdens de analyse: {e}")
-            st.info("Tip: Controleer of je Gemini API key in Google AI Studio op 'Paid' of 'Free' staat. Beiden werken, maar soms moet een nieuwe key even 'wennen'.")
+            # Als het model nog steeds 404 geeft, tonen we de beschikbare modellen voor jouw key
+            st.error(f"Fout: {e}")
+            if "404" in str(e):
+                st.warning("Google vindt het model niet. We proberen nu een lijst op te vragen van wat wél werkt voor jouw key...")
+                models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                st.write("Beschikbare modellen voor jouw key:", models)
         finally:
             if os.path.exists(audio_file):
                 os.remove(audio_file)
