@@ -40,9 +40,15 @@ def save_to_github(data, sha=None):
         "Authorization": f"token {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json"
     }
+    
+    # We zetten de data om naar JSON
+    json_string = json.dumps(data, indent=4)
+    content_bytes = json_string.encode("utf-8")
+    content_base64 = base64.b64encode(content_bytes).decode("utf-8")
+    
     payload = {
-        "message": "Archief bijwerken",
-        "content": base64.b64encode(json.dumps(data, indent=4).encode("utf-8")).decode("utf-8")
+        "message": f"Archief bijwerken: {len(data)} items",
+        "content": content_base64
     }
     if sha:
         payload["sha"] = sha
@@ -50,24 +56,25 @@ def save_to_github(data, sha=None):
     resp = requests.put(url, json=payload, headers=headers)
     
     if resp.status_code in [200, 201]:
-        st.sidebar.success("✅ GitHub database succesvol bijgewerkt!")
+        st.sidebar.success(f"✅ GitHub bevestigt ontvangst van {len(data)} items!")
         return resp.json()["content"]["sha"]
     else:
-        st.sidebar.error(f"❌ GitHub Fout {resp.status_code}: {resp.text}")
+        st.sidebar.error(f"❌ GitHub weigert: {resp.status_code}")
+        st.sidebar.write(resp.text)
         return sha
 
 # --- INTERFACE CONFIGURATIE ---
 st.set_page_config(page_title="Mij Gedacht AI", page_icon="🎙️", layout="centered")
 
-# Logo tonen vanuit GitHub repo
+# Logo
 if os.path.exists("logo.png"):
     st.image("logo.png", width=200)
 else:
-    # Backup URL mocht het lokale bestand er nog niet zijn
     st.image("https://i1.sndcdn.com/avatars-I7oN87f2iIuImsC0-E2M1XQ-t500x500.jpg", width=200)
 
 st.markdown("<h1 style='margin-top: -20px;'>Mij Gedacht AI</h1>", unsafe_allow_html=True)
 
+# Database ophalen
 db, current_sha = get_github_db()
 
 # --- DE ZOEKBALK ---
@@ -75,28 +82,21 @@ query = st.text_input("Stel je vraag aan de podcast-conciërge:", placeholder="W
 
 if query:
     if not db:
-        st.info("Het archief is nog leeg. Voeg data toe via het beheerpaneel.")
+        st.info("Het archief is momenteel nog leeg op GitHub.")
     else:
         with st.spinner("De conciërge zoekt het op..."):
             context_text = "\n".join([f"Aflevering {k}: {v['summary']}" for k, v in db.items()])
-            
-            prompt = f"""
-            Je bent de 'Mij Gedacht' AI-conciërge. 
-            Antwoord in het sappig Vlaams. Gebruik humor en café-praat.
-            Gebruik uitsluitend deze context: {context_text[:18000]}
-            Vraag: {query}
-            """
-            
+            prompt = f"Je bent de Mij Gedacht AI-conciërge. Antwoord in het sappig Vlaams. Context: {context_text[:18000]}\n\nVraag: {query}"
             try:
                 response = gemini_model.generate_content(prompt)
                 st.chat_message("assistant").write(response.text)
             except Exception as e:
-                st.error("De conciërge heeft even pauze. Probeer het over een minuutje.")
+                st.error("AI foutje. Probeer over een minuut opnieuw.")
 
 # --- BEHEER (Zijbalk) ---
 with st.sidebar:
     st.header("⚙️ Systeembeheer")
-    st.caption(f"Archief: {len(db)} items")
+    st.write(f"Huidig aantal in geheugen: **{len(db)}**")
     
     with st.expander("Nieuwe data toevoegen"):
         if st.button("🔄 Scan RSS voor nieuwe aflevering"):
@@ -105,7 +105,8 @@ with st.sidebar:
             
             if new_entries:
                 entry = new_entries[0]
-                with st.status(f"Verwerken: {entry.title}"):
+                with st.status(f"Verwerken: {entry.title}") as status:
+                    # Download
                     audio_url = entry.enclosures[0].href
                     r = requests.get(audio_url, stream=True)
                     audio_file = "temp.mp3"
@@ -114,6 +115,7 @@ with st.sidebar:
                             f.write(chunk)
                             if os.path.getsize(audio_file) > 12*1024*1024: break
                     
+                    # Transcribe
                     with open(audio_file, "rb") as f:
                         ts = groq_client.audio.transcriptions.create(
                             file=(audio_file, f.read()),
@@ -121,26 +123,29 @@ with st.sidebar:
                             response_format="text", language="nl"
                         )
                     
+                    # Samenvatten
                     summary_text = None
                     for i in range(3):
                         try:
-                            res = gemini_model.generate_content(f"Maak een uitgebreide samenvatting van dit fragment voor de database: {ts[:8000]}")
+                            res = gemini_model.generate_content(f"Vat dit fragment kort samen in het Vlaams: {ts[:8000]}")
                             summary_text = res.text
                             break
-                        except Exception as e:
-                            st.warning(f"Poging {i+1} mislukt, even wachten...")
+                        except:
                             time.sleep(65)
                     
                     if summary_text:
+                        # Belangrijk: we voegen het toe aan de lokale db variabele
                         db[entry.title] = {"summary": summary_text, "date": entry.published}
-                        # De SHA wordt nu correct bijgewerkt na het opslaan
+                        st.write(f"Nieuw item toegevoegd aan lijst. Totaal nu: {len(db)}")
+                        
+                        # Nu opslaan naar GitHub
                         current_sha = save_to_github(db, current_sha)
                         
                         if os.path.exists(audio_file):
                             os.remove(audio_file)
-                            
-                        st.success("Verwerking voltooid!")
-                        time.sleep(1)
+                        
+                        st.success("Klaar! Pagina herladen...")
+                        time.sleep(2)
                         st.rerun()
             else:
-                st.info("Geen nieuwe afleveringen.")
+                st.info("Geen nieuwe afleveringen gevonden.")
