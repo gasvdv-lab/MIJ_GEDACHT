@@ -4,46 +4,49 @@ import os
 import requests
 from groq import Groq
 import google.generativeai as genai
-from dotenv import load_dotenv
 
-# Laad API sleutels uit .env bestand
-load_dotenv()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# 1. Veilig inladen van secrets
+if "GROQ_API_KEY" in st.secrets and "GEMINI_API_KEY" in st.secrets:
+    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+else:
+    st.error("⚠️ API sleutels niet gevonden in Streamlit Secrets!")
+    st.stop()
 
-# Clients initialiseren
-groq_client = Groq(api_key=GROQ_API_KEY)
-genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+# 2. Clients initialiseren met de JUISTE modelnaam
+try:
+    groq_client = Groq(api_key=GROQ_API_KEY)
+    genai.configure(api_key=GEMINI_API_KEY)
+    # De fix: We gebruiken 'gemini-1.5-flash' zonder 'models/' ervoor als alternatief
+    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+except Exception as e:
+    st.error(f"Fout bij initialisatie: {e}")
+    st.stop()
 
-st.set_page_config(page_title="Mij Gedacht AI Agent", page_icon="🎙️")
+st.set_page_config(page_title="Mij Gedacht AI", page_icon="🎙️")
 st.title("🎙️ Mij Gedacht: Online AI Agent")
 
 rss_url = st.text_input("RSS Feed URL", "https://feeds.soundcloud.com/users/soundcloud:users:191935492/sounds.rss")
 
 if st.button("Analyseer Laatste Aflevering"):
-    with st.spinner("Bezig met ophalen en analyseren..."):
-        # 1. RSS Feed uitlezen
-        feed = feedparser.parse(rss_url)
-        if not feed.entries:
-            st.error("Kon geen afleveringen vinden.")
-        else:
+    with st.spinner("De agent luistert en denkt na..."):
+        try:
+            # 1. RSS Feed
+            feed = feedparser.parse(rss_url)
             entry = feed.entries[0]
             audio_url = entry.enclosures[0].href
-            st.info(f"Aflevering gevonden: {entry.title}")
+            st.info(f"Bezig met: {entry.title}")
 
-            # 2. Audio downloaden (beperkt fragment voor test/snelheid)
+            # 2. Audio ophalen (fragment)
             audio_file = "temp_audio.mp3"
             response = requests.get(audio_url, stream=True)
             with open(audio_file, "wb") as f:
-                # We downloaden de eerste 20MB (ongeveer 15-20 min audio)
                 for chunk in response.iter_content(chunk_size=1024*1024):
                     f.write(chunk)
-                    if os.path.getsize(audio_file) > 20 * 1024 * 1024:
+                    if os.path.getsize(audio_file) > 10 * 1024 * 1024:
                         break
 
-            # 3. Transcriptie via GROQ (Whisper Large V3)
-            st.write("🤖 AI luistert naar de podcast via Groq...")
+            # 3. Transcriptie via GROQ
             with open(audio_file, "rb") as file:
                 transcription = groq_client.audio.transcriptions.create(
                     file=(audio_file, file.read()),
@@ -53,22 +56,15 @@ if st.button("Analyseer Laatste Aflevering"):
                 )
             
             # 4. Samenvatting via Gemini
-            st.write("🧠 Brein (Gemini) maakt de samenvatting...")
-            prompt = f"""
-            Je bent een expert van de podcast 'Mij Gedacht'. 
-            Hieronder volgt een transcript van een aflevering. 
-            Maak een gevatte samenvatting in het Vlaams. 
-            Focus op: besproken FC De Kampioenen thema's, grappige momenten en de algemene sfeer.
-            
-            Transcript: {transcription[:15000]} 
-            """
+            prompt = f"Vat dit fragment van de podcast 'Mij Gedacht' kort samen in het Vlaams: {transcription[:8000]}"
             summary = gemini_model.generate_content(prompt)
 
-            # Resultaat tonen
-            st.success("Analyse voltooid!")
-            st.subheader("De 'Mij Gedacht' Samenvatting")
+            st.success("Klaar!")
+            st.subheader("Analyse")
             st.write(summary.text)
             
-            # Opruimen
+        except Exception as e:
+            st.error(f"Er ging iets mis: {e}")
+        finally:
             if os.path.exists(audio_file):
                 os.remove(audio_file)
