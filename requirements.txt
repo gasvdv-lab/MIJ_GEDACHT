@@ -1,0 +1,6 @@
+streamlit
+feedparser
+groq
+google-generativeai
+python-dotenv
+requests
