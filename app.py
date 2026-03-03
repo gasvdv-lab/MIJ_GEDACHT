@@ -18,9 +18,9 @@ try:
     groq_client = Groq(api_key=GROQ_API_KEY)
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # DE FIX: We gebruiken de korte naam 'gemini-1.5-flash' 
-    # De bibliotheek kiest zelf de beste versie (v1beta of v1)
-    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+    # We proberen de meest universele modelnaam
+    model_name = 'gemini-1.5-flash-latest' 
+    gemini_model = genai.GenerativeModel(model_name)
 except Exception as e:
     st.error(f"Fout bij initialisatie: {e}")
     st.stop()
@@ -35,20 +35,24 @@ if st.button("Analyseer Laatste Aflevering"):
         try:
             # 1. RSS Feed
             feed = feedparser.parse(rss_url)
+            if not feed.entries:
+                st.error("Geen afleveringen gevonden.")
+                st.stop()
+                
             entry = feed.entries[0]
             audio_url = entry.enclosures[0].href
             st.info(f"Bezig met: {entry.title}")
 
-            # 2. Audio ophalen (fragment van 10MB voor snelheid)
+            # 2. Audio ophalen (fragment van 8MB voor maximale snelheid)
             audio_file = "temp_audio.mp3"
             response = requests.get(audio_url, stream=True)
             with open(audio_file, "wb") as f:
                 for chunk in response.iter_content(chunk_size=1024*1024):
                     f.write(chunk)
-                    if os.path.getsize(audio_file) > 10 * 1024 * 1024:
+                    if os.path.getsize(audio_file) > 8 * 1024 * 1024:
                         break
 
-            # 3. Transcriptie via GROQ (Whisper Large V3 Turbo)
+            # 3. Transcriptie via GROQ
             st.write("🤖 AI luistert via Groq...")
             with open(audio_file, "rb") as file:
                 transcription = groq_client.audio.transcriptions.create(
@@ -60,9 +64,9 @@ if st.button("Analyseer Laatste Aflevering"):
             
             # 4. Samenvatting via Gemini
             st.write("🧠 Brein (Gemini) analyseert...")
-            prompt = f"Vat dit fragment van de podcast 'Mij Gedacht' kort en gevat samen in het Vlaams: {transcription[:8000]}"
+            prompt = f"Je bent een expert van de podcast 'Mij Gedacht'. Vat dit fragment kort en gevat samen in het Vlaams: {transcription[:8000]}"
             
-            # We voegen een extra check toe voor de generatie
+            # Genereren met foutafhandeling voor het model
             response = gemini_model.generate_content(prompt)
 
             st.success("Klaar!")
@@ -70,8 +74,8 @@ if st.button("Analyseer Laatste Aflevering"):
             st.write(response.text)
             
         except Exception as e:
-            # We tonen de fout maar houden het opgeruimd
-            st.error(f"Er ging iets mis: {e}")
+            st.error(f"Er ging iets mis tijdens de analyse: {e}")
+            st.info("Tip: Controleer of je Gemini API key in Google AI Studio op 'Paid' of 'Free' staat. Beiden werken, maar soms moet een nieuwe key even 'wennen'.")
         finally:
             if os.path.exists(audio_file):
                 os.remove(audio_file)
