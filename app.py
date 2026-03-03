@@ -41,77 +41,76 @@ def save_to_github(data, sha=None):
         "message": "Update podcast database",
         "content": base64.b64encode(json.dumps(data, indent=4).encode("utf-8")).decode("utf-8")
     }
-    if sha:
-        payload["sha"] = sha
-    
-    resp = requests.put(url, json=payload, headers=headers)
-    if resp.status_code in [200, 201]:
-        return resp.json().get("content", {}).get("sha", sha)
-    return sha
+    if sha: payload["sha"] = sha
+    requests.put(url, json=payload, headers=headers)
 
-st.set_page_config(page_title="Mij Gedacht Archief", page_icon="🗄️", layout="wide")
-st.title("🗄️ Mij Gedacht: Het Volledige Archief")
+# Layout
+st.set_page_config(page_title="Mij Gedacht AI Zoekmachine", page_icon="🔍", layout="centered")
+st.title("🔍 Mij Gedacht AI")
+st.caption("Stel vragen over de podcast en ik zoek het op in het archief.")
 
-# Laden van de database
 db, current_sha = get_github_db()
 
-st.sidebar.header("Archief Status")
-st.sidebar.write(f"Items in database: {len(db)}")
+# --- GOOGLE-ACHTIGE ZOEKFUNCTIE ---
+query = st.text_input("Waar zoek je informatie over?", placeholder="Bijv: Wat zeiden ze over de dagschotel van Xavier?")
 
-if st.button("🚀 Scan & Analyseer (Stap voor stap)"):
-    feed = feedparser.parse("https://feeds.soundcloud.com/users/soundcloud:users:191935492/sounds.rss")
-    new_entries = [e for e in feed.entries if e.title not in db]
+if query and db:
+    with st.spinner("Het archief doorzoeken..."):
+        # We maken een grote tekstblok van alle samenvattingen voor context
+        context_text = "\n".join([f"Aflevering {k}: {v['summary']}" for k, v in db.items()])
+        
+        prompt = f"""
+        Je bent de officiële Mij Gedacht AI-agent. Gebruik enkel de volgende context om de vraag te beantwoorden.
+        Als de informatie niet in de context staat, zeg dan vriendelijk dat de podcasters dit (nog) niet besproken hebben in de geanalyseerde afleveringen.
+        
+        CONTEXT:
+        {context_text[:15000]}
+        
+        VRAAG:
+        {query}
+        """
+        
+        try:
+            response = gemini_model.generate_content(prompt)
+            st.markdown("### 🤖 De Agent zegt:")
+            st.write(response.text)
+        except Exception as e:
+            st.error(f"Fout bij beantwoorden: {e}")
+
+st.divider()
+
+# --- BEHEER SECTIE (In de zijbalk) ---
+with st.sidebar:
+    st.header("⚙️ Beheer")
+    st.write(f"Archief grootte: {len(db)} afleveringen")
     
-    if not new_entries:
-        st.success("Alles is up-to-date!")
-    else:
-        # We verwerken er nu 1 per klik om de ResourceExhausted fout 100% te vermijden
-        entry = new_entries[0]
-        with st.status(f"Bezig met: {entry.title}") as s:
-            audio_url = entry.enclosures[0].href
-            audio_file = "temp.mp3"
-            
-            # Download
-            r = requests.get(audio_url, stream=True)
-            with open(audio_file, "wb") as f:
-                for chunk in r.iter_content(1024*1024):
-                    f.write(chunk)
-                    if os.path.getsize(audio_file) > 10*1024*1024: break
-            
-            # Groq Transcriptie (Fix voor de file.read() error)
-            st.write("🤖 AI luistert...")
-            with open(audio_file, "rb") as f:
-                audio_data = f.read()
-                ts = groq_client.audio.transcriptions.create(
-                    file=(audio_file, audio_data),
-                    model="whisper-large-v3-turbo",
-                    response_format="text", 
-                    language="nl"
-                )
-            
-            # Gemini Analyse
-            st.write("🧠 AI analyseert...")
-            time.sleep(5) # Korte adempauze
-            
-            try:
+    if st.button("🔄 Scan nieuwe aflevering"):
+        feed = feedparser.parse("https://feeds.soundcloud.com/users/soundcloud:users:191935492/sounds.rss")
+        new_entries = [e for e in feed.entries if e.title not in db]
+        
+        if new_entries:
+            entry = new_entries[0]
+            with st.status(f"Analyseren: {entry.title}"):
+                # Download & Transcribe (Zelfde logica als voorheen)
+                audio_url = entry.enclosures[0].href
+                r = requests.get(audio_url, stream=True)
+                with open("temp.mp3", "wb") as f:
+                    for chunk in r.iter_content(1024*1024):
+                        f.write(chunk)
+                        if os.path.getsize("temp.mp3") > 10*1024*1024: break
+                
+                with open("temp.mp3", "rb") as f:
+                    ts = groq_client.audio.transcriptions.create(
+                        file=("temp.mp3", f.read()),
+                        model="whisper-large-v3-turbo",
+                        response_format="text", language="nl"
+                    )
+                
                 res = gemini_model.generate_content(f"Vat kort samen in het Vlaams: {ts[:8000]}")
-                summary_text = res.text
-                
-                # Opslaan
-                db[entry.title] = {"summary": summary_text, "date": entry.published}
-                current_sha = save_to_github(db, current_sha)
-                
-                st.write("✅ Succesvol opgeslagen!")
+                db[entry.title] = {"summary": res.text, "date": entry.published}
+                save_to_github(db, current_sha)
+                os.remove("temp.mp3")
+                st.success("Opgeslagen!")
                 st.rerun()
-            except Exception as e:
-                st.error(f"Gemini fout: {e}")
-            finally:
-                if os.path.exists(audio_file): os.remove(audio_file)
-
-# Archief tonen
-if db:
-    selected = st.selectbox("Kies een aflevering:", sorted(list(db.keys()), reverse=True))
-    st.markdown(f"### {selected}")
-    st.write(db[selected]["summary"])
-else:
-    st.info("De database is nog leeg. Klik op de Scan knop om te beginnen!")
+        else:
+            st.success("Alles is bijgewerkt!")
