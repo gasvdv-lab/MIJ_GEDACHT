@@ -36,13 +36,25 @@ def get_github_db():
 
 def save_to_github(data, sha=None):
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/database.json"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
     payload = {
         "message": "Archief bijwerken",
         "content": base64.b64encode(json.dumps(data, indent=4).encode("utf-8")).decode("utf-8")
     }
-    if sha: payload["sha"] = sha
-    requests.put(url, json=payload, headers=headers)
+    if sha:
+        payload["sha"] = sha
+    
+    resp = requests.put(url, json=payload, headers=headers)
+    
+    if resp.status_code in [200, 201]:
+        st.sidebar.success("✅ GitHub database succesvol bijgewerkt!")
+        return resp.json()["content"]["sha"]
+    else:
+        st.sidebar.error(f"❌ GitHub Fout {resp.status_code}: {resp.text}")
+        return sha
 
 # --- INTERFACE CONFIGURATIE ---
 st.set_page_config(page_title="Mij Gedacht AI", page_icon="🎙️", layout="centered")
@@ -96,14 +108,15 @@ with st.sidebar:
                 with st.status(f"Verwerken: {entry.title}"):
                     audio_url = entry.enclosures[0].href
                     r = requests.get(audio_url, stream=True)
-                    with open("temp.mp3", "wb") as f:
+                    audio_file = "temp.mp3"
+                    with open(audio_file, "wb") as f:
                         for chunk in r.iter_content(1024*1024):
                             f.write(chunk)
-                            if os.path.getsize("temp.mp3") > 12*1024*1024: break
+                            if os.path.getsize(audio_file) > 12*1024*1024: break
                     
-                    with open("temp.mp3", "rb") as f:
+                    with open(audio_file, "rb") as f:
                         ts = groq_client.audio.transcriptions.create(
-                            file=("temp.mp3", f.read()),
+                            file=(audio_file, f.read()),
                             model="whisper-large-v3-turbo",
                             response_format="text", language="nl"
                         )
@@ -114,13 +127,20 @@ with st.sidebar:
                             res = gemini_model.generate_content(f"Maak een uitgebreide samenvatting van dit fragment voor de database: {ts[:8000]}")
                             summary_text = res.text
                             break
-                        except:
+                        except Exception as e:
+                            st.warning(f"Poging {i+1} mislukt, even wachten...")
                             time.sleep(65)
                     
                     if summary_text:
                         db[entry.title] = {"summary": summary_text, "date": entry.published}
-                        save_to_github(db, current_sha)
-                        st.success("Opgeslagen!")
+                        # De SHA wordt nu correct bijgewerkt na het opslaan
+                        current_sha = save_to_github(db, current_sha)
+                        
+                        if os.path.exists(audio_file):
+                            os.remove(audio_file)
+                            
+                        st.success("Verwerking voltooid!")
+                        time.sleep(1)
                         st.rerun()
             else:
                 st.info("Geen nieuwe afleveringen.")
