@@ -47,12 +47,14 @@ def save_to_github(data, sha=None):
 # --- INTERFACE CONFIGURATIE ---
 st.set_page_config(page_title="Mij Gedacht AI", page_icon="🎙️", layout="centered")
 
-# Logo URL (Mij Gedacht Podcast cover)
-logo_url = "https://i1.sndcdn.com/avatars-I7oN87f2iIuImsC0-E2M1XQ-t500x500.jpg" 
+# Logo tonen vanuit GitHub repo
+if os.path.exists("logo.png"):
+    st.image("logo.png", width=200)
+else:
+    # Backup URL mocht het lokale bestand er nog niet zijn
+    st.image("https://i1.sndcdn.com/avatars-I7oN87f2iIuImsC0-E2M1XQ-t500x500.jpg", width=200)
 
-# Gecentreerde titel en logo
-st.image(logo_url, width=200)
-st.markdown("<h1 style='text-align: left; margin-top: -20px;'>Mij Gedacht AI</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='margin-top: -20px;'>Mij Gedacht AI</h1>", unsafe_allow_html=True)
 
 db, current_sha = get_github_db()
 
