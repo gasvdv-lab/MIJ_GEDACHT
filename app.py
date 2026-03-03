@@ -18,8 +18,9 @@ try:
     groq_client = Groq(api_key=GROQ_API_KEY)
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # We proberen de meest stabiele model-aanroep
-    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+    # We gebruiken nu een model uit jouw specifieke lijst (nr 22)
+    # Dit is de krachtige Gemini 3 Flash
+    gemini_model = genai.GenerativeModel('gemini-3-flash-preview')
 except Exception as e:
     st.error(f"Fout bij initialisatie: {e}")
     st.stop()
@@ -38,13 +39,13 @@ if st.button("Analyseer Laatste Aflevering"):
             audio_url = entry.enclosures[0].href
             st.info(f"Bezig met: {entry.title}")
 
-            # 2. Audio ophalen (fragment)
+            # 2. Audio ophalen (fragment van 12MB)
             audio_file = "temp_audio.mp3"
             response = requests.get(audio_url, stream=True)
             with open(audio_file, "wb") as f:
                 for chunk in response.iter_content(chunk_size=1024*1024):
                     f.write(chunk)
-                    if os.path.getsize(audio_file) > 10 * 1024 * 1024:
+                    if os.path.getsize(audio_file) > 12 * 1024 * 1024:
                         break
 
             # 3. Transcriptie via GROQ
@@ -57,26 +58,22 @@ if st.button("Analyseer Laatste Aflevering"):
                     language="nl"
                 )
             
-            # 4. Samenvatting via Gemini
-            st.write("🧠 Brein (Gemini) analyseert...")
+            # 4. Samenvatting via Gemini 3
+            st.write("🧠 Brein (Gemini 3 Flash) analyseert...")
+            prompt = f"""
+            Je bent een expert van de podcast 'Mij Gedacht'. 
+            Maak een gevatte samenvatting in het Vlaams van dit fragment:
+            {transcription[:12000]}
+            """
             
-            # We forceren hier de aanroep zonder extra opties om 404 te vermijden
-            prompt = f"Vat dit fragment van de podcast 'Mij Gedacht' kort samen in het Vlaams: {transcription[:8000]}"
-            
-            # De 'magic fix': we proberen direct te genereren
             response = gemini_model.generate_content(prompt)
 
             st.success("Klaar!")
-            st.subheader("Analyse")
+            st.subheader("De Analyse van 'De Bomababe'")
             st.write(response.text)
             
         except Exception as e:
-            # Als het model nog steeds 404 geeft, tonen we de beschikbare modellen voor jouw key
-            st.error(f"Fout: {e}")
-            if "404" in str(e):
-                st.warning("Google vindt het model niet. We proberen nu een lijst op te vragen van wat wél werkt voor jouw key...")
-                models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                st.write("Beschikbare modellen voor jouw key:", models)
+            st.error(f"Er ging iets mis: {e}")
         finally:
             if os.path.exists(audio_file):
                 os.remove(audio_file)
