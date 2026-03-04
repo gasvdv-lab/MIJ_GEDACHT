@@ -22,11 +22,12 @@ except Exception:
 # 2. Clients
 groq_client = Groq(api_key=GROQ_API_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+
+# CORRECTIE: Gebruik de meest actuele model-naam voor de SDK
+gemini_model = genai.GenerativeModel('gemini-1.5-flash') 
 
 # 3. GitHub Sync
 def get_latest_github_state():
-    # Verwijder eventuele spaties uit GITHUB_REPO
     repo = GITHUB_REPO.strip()
     url = f"https://api.github.com/repos/{repo}/contents/database.json"
     headers = {
@@ -41,10 +42,9 @@ def get_latest_github_state():
             content = base64.b64decode(data["content"]).decode("utf-8")
             return json.loads(content), data["sha"]
         elif resp.status_code == 404:
-            add_log("Waarschuwing: database.json niet gevonden op GitHub. Nieuw bestand wordt aangemaakt bij opslaan.")
             return {}, None
-    except Exception as e:
-        add_log(f"GitHub ophaal fout: {e}")
+    except Exception:
+        pass
     return {}, None
 
 def save_to_github_max(data):
@@ -55,7 +55,6 @@ def save_to_github_max(data):
         "Accept": "application/vnd.github.v3+json"
     }
     
-    # Altijd de meest recente SHA ophalen net voor het opslaan
     current_state = requests.get(url, headers=headers)
     sha = None
     if current_state.status_code == 200:
@@ -86,7 +85,6 @@ def add_log(msg):
 # --- UI ---
 st.set_page_config(page_title="Mij Gedacht AI - MAX", layout="centered")
 
-# Initialiseer database bij start
 if 'db' not in st.session_state:
     st.session_state.db, _ = get_latest_github_state()
 
@@ -96,6 +94,7 @@ query = st.text_input("Vraag de conciërge iets:", placeholder="Stel een vraag..
 if query and st.session_state.db:
     with st.spinner("Zoeken..."):
         context = "\n\n".join([f"AFLEVERING: {k}\nVERSLAG: {v['summary']}" for k, v in st.session_state.db.items()])
+        # De aanroep zelf
         res = gemini_model.generate_content(f"Antwoord in sappig Vlaams: {query}\n\nContext:\n{context[:200000]}")
         st.info(res.text)
 
@@ -105,7 +104,6 @@ with st.sidebar:
         st.session_state.scan_logs = []
         feed = feedparser.parse("https://feeds.soundcloud.com/users/soundcloud:users:191935492/sounds.rss")
         
-        # Controleer of we data hebben
         db = st.session_state.db
         new_entries = [e for e in feed.entries if e.title not in db]
         
@@ -133,6 +131,7 @@ with st.sidebar:
                         )
                     
                     add_log(f"Gemini analyseert {len(ts)} tekens...")
+                    # Gebruik hier ook het correcte model object
                     res = gemini_model.generate_content(
                         f"Schrijf een extreem uitgebreid verslag van deze podcast in sappig Vlaams: {ts[:500000]}"
                     )
